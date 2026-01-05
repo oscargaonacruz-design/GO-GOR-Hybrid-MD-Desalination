@@ -1,0 +1,486 @@
+
+############################################
+##           INITIAL PARAMETERS           ##
+############################################
+
+
+## OUTPUT FILLE  ## 
+log GO_water_ions.log
+
+units       real 
+dimension   3
+boundary    p p p
+atom_style  full
+
+## DATA FILE ##
+read_data H_upGOR_downGO_1.data 
+
+
+
+############################################
+##  DEFINE A GROUP FOR EACH TYPE OF ATOM  ##
+############################################
+group C type 1
+group H1 type 4
+group H4 type 5
+group HT type 6
+group CLA type 3
+group OT type 11
+group SOD type 12
+group O1 type 7
+group O4 type 10
+group O3 type 9
+group C4 type 2
+group O2 type 8
+
+
+group sheet_1 id 1:1260
+group sheet_2 id 1261:2520
+group sheet_3 id 2521:3780
+group sheet_4 id 3781:4760
+group sheet_5 id 4761:5740
+group sheet_6 id 5741:6720
+group GRA id 6721:7824
+
+group corner id 2 489 839 1110 1262 1749 2099 2370 2522 3009 3359 3630 3782 4269 4439 4710 4762 5249 5419 5690 5742 6229 6399 6670
+
+
+##############################################
+##         JOINING GROUPS                   ##
+##############################################
+## shake group ##
+group shake_group union H1 H4 HT OT O1 O4
+
+## water group ##
+group water union HT OT
+
+##  mix the groups membrane  ##
+group GO union sheet_1 sheet_2 sheet_3 sheet_4 sheet_5 sheet_6 
+
+## iones group ##
+## group ions union CLA SOD
+
+## Oxygen of funtional group with OT water ##
+group OT_O union OT O1 O2 O3 O4
+
+## Oxygen of funtional group with CLA ## 
+group CLA_O union CLA O1 O2 O3 O4
+
+## Oxygen of funtional group with SOD ##
+group SOD_O union SOD O1 O2 O3 O4
+
+## graphene oxide carbons 
+group C_GO subtract C GRA
+
+
+group H1 delete
+group H4 delete
+group HT delete
+group C delete
+
+
+
+#########################################
+##  FORCE FIELD PARAMETERS AND STYLES  ##
+#########################################
+
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+improper_style harmonic
+pair_style lj/charmm/coul/long 10.0 12.0
+
+## include OPLS parameters file 
+include para_GO_water_ions.mod
+
+
+##########################################
+##           RESTRICTIONS               ##
+##########################################
+
+## Fixing  the atoms in the corner  
+fix atoms_corner  corner setforce 0.0 0.0 0.0
+
+## Fix graphene estructure en x,y, z is free 
+fix freeze C_GO setforce 0.0 0.0 NULL
+velocity C_GO set 0.0 0.0 NULL
+fix freeze_velocity C_GO momentum 1 linear 1 1 0
+
+## Fixing  piston of graphene 
+
+velocity GRA set 0.0 0.0 NULL
+fix freeze_velocity_GRA GRA momentum 1 linear 1 1 0
+fix piston_MD GRA rigid single force 1 off off on torque * off off off
+
+
+###########################################
+##         SIMULATIONS SETTINGS          ##
+###########################################
+
+
+## Activate and configure PME
+kspace_style pppm 1.0e-4
+kspace_modify mesh 40 74 250
+
+## Modify the blending rules to use the geometric mean
+pair_modify mix geometric
+
+##  Adjust communication 
+comm_modify cutoff 14
+
+##  Adjust the neighbor list
+neigh_modify delay 0 every 1 check no
+
+##  Ajustar timestep
+timestep 2
+
+
+
+
+##########################################
+##         ENERGY MINIMIZATION          ##
+##########################################
+
+##  Setting the minimization type
+##fix mini all box/relax aniso 0.0
+##minimize 1.0e-8 1.0e-10 100 1000
+##unfix mini
+
+##########################################
+##         SHAKE RESTRICTIONS           ##
+##########################################
+
+## Apply SHAKE constraints to bonds, water angles, and hydrogen bonds in functional groups
+fix shake_water shake_group shake 0.00001 100 0 b 7 8 9 a 10
+
+
+############################################
+##            DEFINING REGIONS            ##
+############################################
+
+## measuring piston displacement
+compute zPiston GRA reduce min z
+compute zPistonmax GRA reduce max z
+compute zMaxMeb C_GO reduce max z
+compute zMinMeb C_GO reduce min z
+
+# Definir una variable atómica para contar átomos con z > 10
+variable feed_zone atom "(z < c_zPiston) && (z > c_zMaxMeb)"
+
+variable membrane_zone  atom "(z < c_zMaxMeb) && (z > c_zMinMeb)"
+
+variable perm_zoneUP atom "(z > c_zPiston)"
+variable perm_zoneDOWN atom "(z < c_zMinMeb)"
+
+
+###################################################
+##   COUNT THE IONS AND WATER IN THE FEET SIDE   ##
+###################################################
+
+compute CLA_feed CLA reduce sum v_feed_zone
+compute SOD_feed SOD reduce sum v_feed_zone
+compute OT_feed OT reduce sum v_feed_zone
+
+#######################################################
+##  COUNT THE IONS AND WATER  INSIDE OF THE MEMBRANE ##
+#######################################################
+
+compute CLA_membrane CLA reduce sum v_membrane_zone
+compute SOD_membrane SOD reduce sum v_membrane_zone
+compute OT_membrane OT reduce sum v_membrane_zone
+
+#########################################
+## COUNT THE IONS IN THE PERMEATE SIDE ##
+#########################################
+
+compute CLA_UP CLA reduce sum v_perm_zoneUP
+compute SOD_UP  SOD reduce sum v_perm_zoneUP
+compute OT_UP  OT reduce sum v_perm_zoneUP
+
+compute CLA_DOWN CLA reduce sum v_perm_zoneDOWN 
+compute SOD_DOWN SOD reduce sum v_perm_zoneDOWN 
+compute OT_DOWN OT reduce sum v_perm_zoneDOWN 
+
+##  adding up plus down
+
+variable count_CLA_permeate_side equal "c_CLA_UP + c_CLA_DOWN"
+variable count_SOD_permeate_side equal "c_SOD_UP + c_SOD_DOWN"
+variable count_OT_permeate_side equal "c_OT_UP + c_OT_DOWN"
+
+##########################################
+## DENSITY MEASUREMENT ALONG THE Z AXIS ##
+##########################################
+
+## measure the density for the water 
+compute water_chunks water chunk/atom bin/1d z lower 1 units box
+fix des_water water ave/chunk 100 100 10000 water_chunks density/mass ave running file water_density_profile.dat
+
+## measure the density for the Chlorine ions  
+compute CLA_chunks CLA chunk/atom bin/1d z lower 1 units box
+fix dens_CLA CLA ave/chunk 100 100 10000 CLA_chunks density/mass ave running file CLA_density_profile.dat
+
+## measure the density for the Sodium ions  
+compute SOD_chunks SOD chunk/atom bin/1d z lower 1 units box
+fix dens_SOD SOD ave/chunk 100 100 10000 SOD_chunks density/mass ave running file SOD_density_profile.dat
+
+###########################################
+##    MEASURE THE MEMBRANE THICKNESS     ##
+###########################################
+
+## measure with Compute the minimum and maximum z-positions of membrane atoms
+compute zmin GO reduce min z
+compute zmax GO reduce max z
+
+## Calculate the membrane thickness
+variable thickness equal c_zmax-c_zmin
+
+###########################################
+##    MEASURE THE INTERLAMINAR SPACE     ##
+###########################################
+
+## measure with Compute the minimum and maximum z-positions of membrane atoms
+
+compute sheet_1_center sheet_1 com 
+compute sheet_2_center sheet_2 com
+compute sheet_3_center sheet_3 com 
+compute sheet_4_center sheet_4 com
+compute sheet_5_center sheet_5 com
+compute sheet_6_center sheet_6 com
+compute GRA_center GRA com 
+
+## Calculate interlaminar space sheet 1 and sheet 2 
+variable space_12 equal c_sheet_2_center[3]-c_sheet_1_center[3]
+
+## Calculate interlaminar space sheet 2 and sheet 3 
+variable space_23 equal c_sheet_3_center[3]-c_sheet_2_center[3]
+
+## Calculate interlaminar space sheet 3 and sheet 4 
+variable space_34 equal c_sheet_4_center[3]-c_sheet_3_center[3]
+
+## Calculate interlaminar space sheet 4 and sheet 5 
+variable space_45 equal c_sheet_5_center[3]-c_sheet_4_center[3]
+
+## Calculate interlaminar space sheet 5 and sheet 6 
+variable space_56 equal c_sheet_6_center[3]-c_sheet_5_center[3]
+
+## Calculate interlaminar space sheet 7 and piston
+variable space_4GRA equal c_GRA_center[3]-c_sheet_6_center[3]
+
+
+######################################################
+##   RDF BETWEEN WATER AND FUNTIONAL GROUP OXYGEN   ## 
+######################################################    
+
+                                    
+## calculating the rdf for to oxygen hidroxyl and water 
+compute   RDFwater_O1 OT_O rdf 100 7 11
+fix       RDFwater_01 OT_O ave/time 100 100 10000 c_RDFwater_O1[*] file RDF_water_O1.data mode vector 
+
+## calculating the rdf for to oxygen epoxy and water 
+compute   RDFwater_O2 OT_O rdf 100 8 11
+fix       RDFwater_02 OT_O ave/time 100 100 10000 c_RDFwater_O2[*] file RDF_water_O2.data mode vector 
+
+## calculating the rdf for to oxygen carboxyl without hydrogen  and water 
+compute   RDFwater_O3 OT_O rdf 100 9 11
+fix       RDFwater_03 OT_O ave/time 100 100 10000 c_RDFwater_O3[*] file RDF_water_O3.data mode vector 
+
+## calculating the rdf for to oxygen carboxyl with hydrogen  and water 
+compute   RDFwater_O4 OT_O rdf 100 10 11
+fix       RDFwater_04 OT_O ave/time 100 100 10000 c_RDFwater_O3[*] file RDF_water_O4.data mode vector 
+
+
+#########################################################
+##   RDF BETWEEN CHLORINE AND FUNTIONAL GROUP OXYGEN   ## 
+#########################################################    
+
+## calculating the rdf for to oxygen hidroxyl and Chlorine 
+compute   RDFchlorine_O1 CLA_O rdf 100 7 3
+fix       RDFchlorine_01 CLA_O ave/time 100 100 10000 c_RDFchlorine_O1[*] file RDF_chloraine_O1.data mode vector 
+
+## calculating the rdf for to oxygen epoxy and Chlorine 
+compute   RDFchlorine_O2 CLA_O rdf 100 8 3
+fix       RDFchlorine_02 CLA_O ave/time 100 100 10000 c_RDFchlorine_O2[*] file RDF_chloraine_O2.data mode vector 
+
+## calculating the rdf for to oxygen carboxyl and Chlorine 
+compute   RDFchlorine_O3 CLA_O rdf 100 9 3
+fix       RDFchlorine_03 CLA_O ave/time 100 100 10000 c_RDFchlorine_O3[*] file RDF_chloraine_O3.data mode vector 
+
+##  calculating the rdf for to oxygen carboxyl with hydrogen and Chlorine 
+compute   RDFchlorine_O4 CLA_O rdf 100 10 3
+fix       RDFchlorine_04 CLA_O ave/time 100 100 10000 c_RDFchlorine_O4[*] file RDF_chloraine_O4.data mode vector 
+
+#########################################################
+##    RDF BETWEEN SODIUM AND FUNTIONAL GROUP OXYGEN    ## 
+#########################################################    
+
+
+## calculating the rdf for to oxygen hidroxyl and Sodium 
+compute   RDFsodium_O1 SOD_O rdf 100 7 12
+fix       RDFsodium_01 SOD_O ave/time 100 100 10000 c_RDFsodium_O1[*] file RDF_sodium_O1.data mode vector 
+
+## calculating the rdf for to oxygen epoxy and Sodium 
+compute   RDFsodium_O2 SOD_O rdf 100 8 12
+fix       RDFsodium_02 SOD_O ave/time 100 100 10000 c_RDFsodium_O2[*] file RDF_sodium_O2.data mode vector 
+
+## calculating the rdf for to oxygen carboxyl and Sodium
+compute   RDFsodium_O3 SOD_O rdf 100 9 12
+fix       RDFsodium_03 SOD_O ave/time 100 100 10000 c_RDFsodium_O3[*] file RDF_sodium_O3.data mode vector 
+
+## calculating the rdf for to oxygen carboxyl with hydrogen and Sodium
+compute   RDFsodium_O4 SOD_O rdf 100 10 12
+fix       RDFsodium_04 SOD_O ave/time 100 100 10000 c_RDFsodium_O4[*] file RDF_sodium_O4.data mode vector 
+
+
+
+################################################
+##        MSF  WATER AND IONS                 ##                                       
+################################################
+
+## MSF water 
+compute MSD_OT OT msd com yes average yes
+
+## MSF Chlorate
+compute MSD_CLA CLA msd com yes average yes
+
+## MSF Sodium 
+compute MSD_SOD SOD msd com yes average yes
+
+
+################################################
+##         OUTPUT TRAJECTORY  FILE            ##                                       
+################################################
+
+dump 1 all custom 2000 dump.lammpstrj id type x y z
+
+
+################################################
+##            BACKUP COPY  FILE               ##
+################################################
+
+restart 100000 file.restart
+
+
+################################################
+##            PRESSURE                        ##
+################################################
+
+# Calculate Transverse Area
+variable lx equal lx
+variable ly equal ly
+variable lz equal lz
+variable boxzmin equal zlo
+variable transverse_area equal "v_lx * v_ly"
+variable volumen equal "v_lx * v_ly * v_lz"
+
+
+
+
+
+variable vol_alim equal "v_transverse_area * (c_zPiston - c_zMaxMeb)"
+variable vol_perm equal "v_transverse_area * (c_zMinMeb - v_boxzmin)"
+
+
+###########################################################
+## CALCULATING THE ACCELERATION AND DENSITY OF THE SYTEM ##
+###########################################################
+
+#Defining pressure in atmospheres 
+variable Patm equal 300
+
+#converting atmospheres  to newton per angstrom squared
+variable Pressure equal "v_Patm * 101325e-20"
+
+# Calculate Transverse Area
+variable lx equal lx
+variable ly equal ly
+variable lz equal lz
+variable transverse_area equal "v_lx * v_ly"
+variable volumen equal "v_lx * v_ly * v_lz"
+
+
+# Defining Avogadro's Number
+variable NA equal 6.022e23
+
+# Compute per-atom mass using property/atom
+compute atom_mass GRA property/atom mass
+
+# Compute total mass by summing per-atom masses
+compute total_mass GRA reduce sum c_atom_mass
+
+# contando los atomos de grafeno 
+variable count_GRA  equal count(GRA)
+
+# calculate numbers of moles  
+variable moles equal "v_count_GRA / v_NA"
+
+# Calculate the force in newton
+variable FN equal "v_Pressure * v_transverse_area"
+
+#Converting  the force to  kcal/(mol·Å)
+variable force equal "v_FN/(-4184 * 1e10 * v_moles)"
+
+################################################
+##                 PRESSURE                   ##                           
+################################################
+
+## Create dynamic groups of atoms in each region
+group feed_region dynamic all var feed_zone every 100
+group perm_region_down dynamic all var perm_zoneDOWN every 100
+
+## Calculate the stress tensor in each region
+ 
+compute stress_alimentacion feed_region stress/atom NULL
+compute pzz_alim feed_region reduce sum c_stress_alimentacion[3]
+
+compute stress_permeacion perm_region_down stress/atom NULL
+compute pzz_perm perm_region_down reduce sum c_stress_permeacion[3]
+
+##Calculate the pressure on the z axis in each region
+
+variable presion_z_alim equal "-c_pzz_alim / v_vol_alim"
+variable presion_z_perm equal "-c_pzz_perm / v_vol_perm"
+variable presion_z_osmotic equal "v_presion_z_perm - v_presion_z_alim"
+
+################################################
+##       TERMODINAMYC  OUTPUT  FILE          ##                           
+################################################
+ 
+thermo 1000
+thermo_style custom step elapsed temp pe etotal press c_zPiston v_force c_zmin c_OT_feed  c_CLA_feed c_SOD_feed c_CLA_membrane c_SOD_membrane c_OT_membrane v_count_SOD_permeate_side v_count_CLA_permeate_side v_count_OT_permeate_side v_thickness c_MSD_OT[4] c_MSD_CLA[4] c_MSD_SOD[4] v_space_12 v_space_23 v_space_34 v_space_45 v_space_56 v_space_4GRA c_sheet_4_center[3] v_presion_z_alim v_presion_z_perm v_presion_z_osmotic c_zPistonmax c_zPiston
+
+##########################################
+##           EQUILIBRATION    1         ##
+##########################################
+
+##fix nvt_equi all nvt temp 100.0 300.0 10.0
+##run 1000000
+##unfix nvt_equi
+
+################################################
+##               PISTON SET UP                ##
+################################################
+
+fix addforce_piston GRA aveforce 0.0 0.0 v_force
+
+
+################################################
+##           MOLECULAR DYNAMIC                ##
+################################################
+
+
+fix nvt_MD all nvt temp 300.0 300.0 10.0 
+run 10000000
+
+
+
+
+
+
+
+
+
+
+
+
+
+
