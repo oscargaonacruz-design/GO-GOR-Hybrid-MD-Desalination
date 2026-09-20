@@ -91,7 +91,7 @@ improper_style harmonic
 pair_style lj/charmm/coul/long 10.0 12.0
 
 ## include OPLS parameters file 
-include para_GO_water_ions.mod
+include OPLSAA.mod
 
 
 ##########################################
